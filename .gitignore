@@ -1,0 +1,7 @@
+#Ignore all dot files
+.idea/
+*.iml
+*.ipr
+*.iws
+node_modules
+npm-debug.log
