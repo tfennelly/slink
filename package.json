@@ -1,11 +1,12 @@
 {
   "name": "slink",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Source only 'npm link' equivalent. The linked package will have a properly flattened and deduped node-modules dir wrt the package being linked into.",
   "bin": {
     "slink": "./index.js"
   },
   "dependencies": {
-    "rimraf": "^2.5.2"
+    "rimraf": "^2.5.2",
+    "underscore.string": "^3.3.4"
   }
 }
