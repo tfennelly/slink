@@ -10,6 +10,7 @@ var fs = require('fs');
 var path = require('path');
 var rimraf = require('rimraf');
 var _string = require('underscore.string');
+var syncLog = {};
 
 npm.load(function() {
     var gPrefix = npm.config.get('prefix');
@@ -58,24 +59,30 @@ npm.load(function() {
     }
     var slinkMarkerFile = path.resolve(packageLocalNMDir, '.slink');
 
+    var linkedPackageJSON = require(packageLinkDir + '/package.json');
+    
     // Watch all files (but the node_modules) in the linked package, copying changes
     // as they happen.
-    watchAll(packageLinkDir, packageLocalNMDir, false);
+    watchAll(packageLinkDir, packageLocalNMDir, linkedPackageJSON.files, false);
     console.log('Watching for changes in ' + packageLinkDir);
-
     
     // Create the marker file.
     fs.writeFileSync(slinkMarkerFile, '');
 });
 
-function watchAll(packageLinkDir, packageLocalNMDir, tellTheUser) {
+function watchAll(packageLinkDir, packageLocalNMDir, filesSpec, tellTheUser) {
+    var targetDir = path.resolve(packageLinkDir, 'target');
     walkDirTree(packageLinkDir, function(dir) {
-        if (_string.endsWith(dir, 'node_modules')) {
-            // Do not go down into node_modules dirs
+        if (_string.endsWith(dir, 'node_modules') || dir === targetDir) {
+            // Do not go down into the node_modules or target dirs
             return false;
         }
         
-        var relativeToPackageRoot = path.relative(packageLinkDir, dir);
+        var relativeToPackageRoot = './' + path.relative(packageLinkDir, dir);
+        if (relativeToPackageRoot !== './') {
+            relativeToPackageRoot += '/';
+        } 
+        
         var linkFiles = fs.readdirSync(dir);
         if (linkFiles) {
             for (var i = 0; i < linkFiles.length; i++) {
@@ -86,13 +93,24 @@ function watchAll(packageLinkDir, packageLocalNMDir, tellTheUser) {
                 }
                 
                 var linkFilePath = path.resolve(dir, linkFile);
+                
+                if (linkFile === 'target' || isInDirectory(linkFilePath, targetDir)) {
+                    // Ignore anything in the target dir.
+                    continue;
+                }
+                
                 var localFilePath = path.resolve(path.resolve(packageLocalNMDir, relativeToPackageRoot), linkFile);
                 var linkFileStat = fs.statSync(linkFilePath);
                 var localFileStat = undefined;
                 
+                if (linkFileStat.mtime.getTime() === syncLog[linkFilePath]) {
+                    continue;
+                }
+                syncLog[linkFilePath] = linkFileStat.mtime.getTime();
+                
                 if (linkFileStat.isDirectory()) {
                     // Make sure this directory exists in the local node_modules path.
-                    if (!fs.existsSync(localFilePath)) {
+                    if (!fs.existsSync(localFilePath) && isFileOfInterest(linkFilePath, packageLinkDir, filesSpec)) {
                         fs.mkdirSync(localFilePath);
                     }
                     // Other than that, ignore dirs ... walkDirTree will walk us down.
@@ -106,8 +124,15 @@ function watchAll(packageLinkDir, packageLocalNMDir, tellTheUser) {
                 // If the file in the link dir is newer than the local file
                 if (localFileStat === undefined || linkFileStat.mtime.getTime() > localFileStat.mtime.getTime()) {
                     if (linkFile !== 'package.json') {
+                        // See https://github.com/tfennelly/slink/issues/1
+                        if (!isFileOfInterest(linkFilePath, packageLinkDir, filesSpec)) {
+                            if (tellTheUser) {
+                                console.log('    ' + relativeToPackageRoot + linkFile + ' changed but is outside package.json:files. Ignoring change.');
+                            }
+                            continue;
+                        }
                         if (tellTheUser) {
-                            console.log('    ./' + relativeToPackageRoot + '/' + linkFile + ' changes synchronized.');
+                            console.log('    ' + relativeToPackageRoot + linkFile + ' changes synchronized.');
                         }
 
                         // If the same file exists in the locally installed
@@ -121,10 +146,8 @@ function watchAll(packageLinkDir, packageLocalNMDir, tellTheUser) {
                         // screws things up in lots of cases.
                         fs.writeFileSync(localFilePath, fs.readFileSync(linkFilePath));
                     } else {
-                        if (tellTheUser) {
-                            console.log('*** Looks like the package.json file in the linked package has changed. Please reinstall and reslink.');
-                            process.exit(0);
-                        }
+                        console.log('*** Looks like the package.json file in the linked package has changed. Please reinstall and reslink.');
+                        process.exit(0);
                     }
                 }
             }
@@ -132,8 +155,44 @@ function watchAll(packageLinkDir, packageLocalNMDir, tellTheUser) {
     });
     
     setTimeout(function() {
-        watchAll(packageLinkDir, packageLocalNMDir, true);
+        watchAll(packageLinkDir, packageLocalNMDir, filesSpec, true);
     }, 1000);
+}
+
+function isFileOfInterest(linkFilePath, packageLinkDir, filesSpec) {
+    if (!filesSpec) {
+        return true;
+    }
+
+    for (var i = 0; i < filesSpec.length; i++) {
+        var fileSpec = path.resolve(packageLinkDir, filesSpec[i]);
+
+        if (!fs.existsSync(fileSpec)) {
+            continue;
+        }
+
+        var fileSpecStat = fs.statSync(fileSpec);
+        if (fileSpecStat.isDirectory() && isInDirectory(linkFilePath, fileSpec)) {
+            return true;
+        } else if (linkFilePath === fileSpec) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function isInDirectory(filePath, dir) {
+    var parentDir = path.dirname(filePath);
+    
+    if (parentDir === dir) {
+        return true;
+    } else if (parentDir === filePath) {
+        // we've reached the root dir
+        return false;
+    } else {
+        return isInDirectory(parentDir, dir);
+    }
 }
 
 function error(message) {
