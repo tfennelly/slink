@@ -47,4 +47,5 @@ Watching for changes in /Users/tfennelly/projects/A
 In the above case `slink` sits and watches for changes in `../A`.
 
 > Note: You can also `slink` using the package name (i.e. not a relative path). This works so long as the package being `slink`d has been `npm link`d.
+
 > Note: If `../A/package.json` contains a `files` spec, that spec will be honoured i.e. only files covered by the spec will be synchronized.
