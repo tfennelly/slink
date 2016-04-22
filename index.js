@@ -8,6 +8,8 @@
 var npm = require('npm');
 var fs = require('fs');
 var path = require('path');
+var rimraf = require('rimraf');
+var _string = require('underscore.string');
 
 npm.load(function() {
     var gPrefix = npm.config.get('prefix');
@@ -26,9 +28,24 @@ npm.load(function() {
     var packageName = process.argv[2];
     var packageLinkDir = path.resolve(gNodeModules, packageName);
     if (!fs.existsSync(packageLinkDir)) {
-        error("*** Package '" + packageName + "' has not yet been globally linked. You must go there and link it first.");
-        return;
+        // Maybe the user provided a path to the package being linked (instead of it's name).
+        packageLinkDir = path.resolve(process.cwd(), packageName);
+        if (fs.existsSync(packageLinkDir)) {
+            // Yep ... user provided a relative path. So, we need to discover the package name.
+            var linkedPackageJSONFile = packageLinkDir + '/package.json';
+            if (fs.existsSync(linkedPackageJSONFile)) {
+                var linkedPackageJSON = require(linkedPackageJSONFile);
+                packageName = linkedPackageJSON.name;
+            } else {
+                error("*** '" + packageLinkDir + "' is not an NPM package (has no package.json).");
+                return;
+            }
+        } else {
+            error("*** Package '" + packageName + "' has not yet been globally linked. You must go there and link it first.");
+            return;
+        }
     }
+    
     var lstatLinkDir = fs.lstatSync(packageLinkDir);
     if (lstatLinkDir.isSymbolicLink()) {
         packageLinkDir = fs.readlinkSync(packageLinkDir);
@@ -40,56 +57,83 @@ npm.load(function() {
         return;
     }
     var slinkMarkerFile = path.resolve(packageLocalNMDir, '.slink');
-    if (fs.existsSync(slinkMarkerFile)) {
-        error("*** Package '" + packageName + "' has already been slink'd. You must reinstall it if you wish to reslink it (npm install).");
-        return;
-    }
 
-    // Now, we remove everything from packageLocalNMDir that exists in the packageLinkDir
-    // and then symlink from the packageLinkDir. Ignores the node_module dir and package.json.
-    // 
-    // In the end, we end up with a linked version of the package being developed, but
-    // also having a properly flattened/deduped node_module dir wrt the package it is
-    // linked into, which means we don't need to do other linking that in many cases
-    // probably will not work anyway.
-    
-    // Link all files (but the node_modules) from the linked package to
-    // the local install.
-    linkAll(packageLinkDir, packageLocalNMDir);
+    // Watch all files (but the node_modules) in the linked package, copying changes
+    // as they happen.
+    watchAll(packageLinkDir, packageLocalNMDir, false);
+    console.log('Watching for changes in ' + packageLinkDir);
+
     
     // Create the marker file.
     fs.writeFileSync(slinkMarkerFile, '');
 });
 
-function linkAll(packageLinkDir, packageLocalNMDir) {
-    var files = fs.readdirSync(packageLinkDir);
-    if (files) {
-        var rimraf = require('rimraf');
-
-        for (var i = 0; i < files.length; i++) {
-            var file = files[i];
-            
-            if (file === 'node_modules' || file === 'package.json') {
-                continue;
-            }
-            
-            // If the same file exists in the locally installed
-            // package, then we delete that and symlink the file
-            // from the link dir.
-            var localFilePath = path.resolve(packageLocalNMDir, file);
-            if (fs.existsSync(localFilePath)) {
-                var stats = fs.statSync(localFilePath);
-                if (stats.isDirectory()) {
-                    rimraf.sync(localFilePath);
-                } else {
-                    fs.unlinkSync(localFilePath);
+function watchAll(packageLinkDir, packageLocalNMDir, tellTheUser) {
+    walkDirTree(packageLinkDir, function(dir) {
+        if (_string.endsWith(dir, 'node_modules')) {
+            // Do not go down into node_modules dirs
+            return false;
+        }
+        
+        var relativeToPackageRoot = path.relative(packageLinkDir, dir);
+        var linkFiles = fs.readdirSync(dir);
+        if (linkFiles) {
+            for (var i = 0; i < linkFiles.length; i++) {
+                var linkFile = linkFiles[i];
+                
+                if (linkFile === 'node_modules') {
+                    continue;
                 }
                 
-                var linkFilePath = path.resolve(packageLinkDir, file);
-                fs.symlinkSync(linkFilePath, localFilePath);
+                var linkFilePath = path.resolve(dir, linkFile);
+                var localFilePath = path.resolve(path.resolve(packageLocalNMDir, relativeToPackageRoot), linkFile);
+                var linkFileStat = fs.statSync(linkFilePath);
+                var localFileStat = undefined;
+                
+                if (linkFileStat.isDirectory()) {
+                    // Make sure this directory exists in the local node_modules path.
+                    if (!fs.existsSync(localFilePath)) {
+                        fs.mkdirSync(localFilePath);
+                    }
+                    // Other than that, ignore dirs ... walkDirTree will walk us down.
+                    continue;
+                }
+                
+                if (fs.existsSync(localFilePath)) {
+                    localFileStat = fs.statSync(localFilePath);
+                }
+                
+                // If the file in the link dir is newer than the local file
+                if (localFileStat === undefined || linkFileStat.mtime.getTime() > localFileStat.mtime.getTime()) {
+                    if (linkFile !== 'package.json') {
+                        if (tellTheUser) {
+                            console.log('    ./' + relativeToPackageRoot + '/' + linkFile + ' changes synchronized.');
+                        }
+
+                        // If the same file exists in the locally installed
+                        // package, then we delete that.
+                        if (fs.existsSync(localFilePath)) {
+                            fs.unlinkSync(localFilePath);
+                        }
+
+                        // Copy the file. Symlinking does not work because require resolve
+                        // the performs resolution relative to the symlink real path, which
+                        // screws things up in lots of cases.
+                        fs.writeFileSync(localFilePath, fs.readFileSync(linkFilePath));
+                    } else {
+                        if (tellTheUser) {
+                            console.log('*** Looks like the package.json file in the linked package has changed. Please reinstall and reslink.');
+                            process.exit(0);
+                        }
+                    }
+                }
             }
         }
-    }
+    });
+    
+    setTimeout(function() {
+        watchAll(packageLinkDir, packageLocalNMDir, true);
+    }, 1000);
 }
 
 function error(message) {
@@ -99,46 +143,35 @@ function error(message) {
 
 function printHelp() {
     console.log("------------------------------------------------------");
+    console.log("");
     console.log("slink is a source only 'link' i.e. it does");
     console.log("not link the node_modules dir, which means that the");
     console.log("linked package will have a properly flattened");
     console.log("and deduped node-modules dir wrt the package");
     console.log("being linked into.");
     console.log("");
-    console.log("Step 1:");
-    console.log("-------");
-    console.log("If you are linking, then you are developing a");
-    console.log("package. You need to create a global link for");
-    console.log("this package, allowing it to be easily linked");
-    console.log("into other packages (steps 2 and 3). You may");
-    console.log("already have this done, so skip this step if");
-    console.log("you have.");
-    console.log("");
-    console.log("From inside the package being developed e.g.");
-    console.log("the 'my-cool-package' package in the 'dev' folder:");
-    console.log("");
-    console.log("    npm link");
-    console.log("");
-    console.log("Step 2:");
-    console.log("-------");
-    console.log("You need to 'npm install' the package being");
-    console.log("developed (see step 1) into the package in which");
-    console.log("you want to test it.");
-    console.log("");
-    console.log("From inside the package being used for testing:");
-    console.log("");
-    console.log("    npm install ../../dev/my-cool-package");
-    console.log("");
-    console.log("This installs 'my-cool-package' properly, flattening,");
-    console.log("deduping etc.");
-    console.log("");
-    console.log("Step 3:");
-    console.log("-------");
-    console.log("Now we're ready to slink:");
-    console.log("");
-    console.log("From inside the package being used for testing");
-    console.log("(same folder as step 2):");
-    console.log("");
-    console.log("    slink my-cool-package");
+    console.log("Goto https://www.npmjs.com/package/slink for usage");
+    console.log("details.");
     console.log("------------------------------------------------------");
+}
+
+function walkDirTree(startDir, callback) {
+    if (!fs.existsSync(startDir)) {
+        return;
+    }
+    var stats = fs.statSync(startDir);
+    if (!stats.isDirectory()) {
+        return;
+    }
+    
+    if (callback(startDir) !== false) { // Stop recursion if the callback returns false.
+        var files = fs.readdirSync(startDir);
+        if (files) {
+            for (var i = 0; i < files.length; i++) {
+                // Recursively call walkDirTree for each.
+                // It will ignore non-directory files.
+                walkDirTree(path.resolve(startDir, files[i]), callback);
+            }
+        }
+    }
 }
