@@ -1,6 +1,6 @@
 {
   "name": "slink",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Source only 'npm link' equivalent. The linked package will have a properly flattened and deduped node-modules dir wrt the package being linked into.",
   "bin": {
     "slink": "./index.js"
