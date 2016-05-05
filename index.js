@@ -26,24 +26,33 @@ npm.load(function() {
         return;
     }
     
+    function getPackageName(packageDir) {
+        var linkedPackageJSONFile = packageDir + '/package.json';
+        if (fs.existsSync(linkedPackageJSONFile)) {
+            var linkedPackageJSON = require(linkedPackageJSONFile);
+            return linkedPackageJSON.name;
+        } else {
+            error("*** '" + packageDir + "' is not an NPM package (has no package.json).");
+        }
+    }
+    
     var packageName = process.argv[2];
-    var packageLinkDir = path.resolve(gNodeModules, packageName);
-    if (!fs.existsSync(packageLinkDir)) {
-        // Maybe the user provided a path to the package being linked (instead of it's name).
-        packageLinkDir = path.resolve(process.cwd(), packageName);
-        if (fs.existsSync(packageLinkDir)) {
-            // Yep ... user provided a relative path. So, we need to discover the package name.
-            var linkedPackageJSONFile = packageLinkDir + '/package.json';
-            if (fs.existsSync(linkedPackageJSONFile)) {
-                var linkedPackageJSON = require(linkedPackageJSONFile);
-                packageName = linkedPackageJSON.name;
+    if (fs.existsSync(packageName)) {
+        // The user provided a path instead of a package name.
+        var packageLinkDir = path.resolve(process.cwd(), packageName);
+        packageName = getPackageName(packageLinkDir);
+    } else {
+        var packageLinkDir = path.resolve(gNodeModules, packageName);
+        if (!fs.existsSync(packageLinkDir)) {
+            // Maybe the user provided a path to the package being linked (instead of it's name).
+            packageLinkDir = path.resolve(process.cwd(), packageName);
+            if (fs.existsSync(packageLinkDir)) {
+                // Yep ... user provided a relative path. So, we need to discover the package name.
+                packageName = getPackageName(packageLinkDir);
             } else {
-                error("*** '" + packageLinkDir + "' is not an NPM package (has no package.json).");
+                error("*** Package '" + packageName + "' has not yet been globally linked. You must go there and link it first.");
                 return;
             }
-        } else {
-            error("*** Package '" + packageName + "' has not yet been globally linked. You must go there and link it first.");
-            return;
         }
     }
     
