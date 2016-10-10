@@ -109,10 +109,10 @@ function watchAll(packageLinkDir, packageLocalNMDir, filesSpec, tellTheUser) {
                 }
                 
                 var localFilePath = path.resolve(path.resolve(packageLocalNMDir, relativeToPackageRoot), linkFile);
-                var linkFileStat = fs.statSync(linkFilePath);
+                var linkFileStat = statSync(linkFilePath);
                 var localFileStat = undefined;
                 
-                if (linkFileStat.mtime.getTime() === syncLog[linkFilePath]) {
+                if (!linkFileStat || linkFileStat.mtime.getTime() === syncLog[linkFilePath]) {
                     continue;
                 }
                 syncLog[linkFilePath] = linkFileStat.mtime.getTime();
@@ -127,7 +127,7 @@ function watchAll(packageLinkDir, packageLocalNMDir, filesSpec, tellTheUser) {
                 }
                 
                 if (fs.existsSync(localFilePath)) {
-                    localFileStat = fs.statSync(localFilePath);
+                    localFileStat = statSync(localFilePath);
                 }
                 
                 // If the file in the link dir is newer than the local file
@@ -180,8 +180,8 @@ function isFileOfInterest(linkFilePath, packageLinkDir, filesSpec) {
             continue;
         }
 
-        var fileSpecStat = fs.statSync(fileSpec);
-        if (fileSpecStat.isDirectory() && isInDirectory(linkFilePath, fileSpec)) {
+        var fileSpecStat = statSync(fileSpec);
+        if (fileSpecStat && fileSpecStat.isDirectory() && isInDirectory(linkFilePath, fileSpec)) {
             return true;
         } else if (linkFilePath === fileSpec) {
             return true;
@@ -227,8 +227,8 @@ function walkDirTree(startDir, callback) {
     if (!fs.existsSync(startDir)) {
         return;
     }
-    var stats = fs.statSync(startDir);
-    if (!stats.isDirectory()) {
+    var stats = statSync(startDir);
+    if (stats && !stats.isDirectory()) {
         return;
     }
     
@@ -241,5 +241,14 @@ function walkDirTree(startDir, callback) {
                 walkDirTree(path.resolve(startDir, files[i]), callback);
             }
         }
+    }
+}
+
+function statSync(filePath) {
+    try {
+        return fs.statSync(filePath);
+    } catch (e) {
+        // Can happen for e.g. symlinks .. just return undefined.
+        return undefined;
     }
 }
