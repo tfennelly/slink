@@ -170,6 +170,11 @@ function watchAll(packageName, packageLinkDir, packageLocalNMDir, filesSpec, tel
                         // the performs resolution relative to the symlink real path, which
                         // screws things up in lots of cases.
                         fs.writeFileSync(localFilePath, fs.readFileSync(linkFilePath));
+
+                        // Generate a .watch_trigger file, telling build watch tools to rebuild after a sync.
+                        // This is useful because watch processes will typically not watch inside e.g. node_modules,
+                        // with the effect that we do not get a local watch triggered rebuild after slinked modules change.
+                        fs.writeFileSync('.watch_trigger', 'AUTO GENERATED - add to .gitignore \n\nChange watch trigger file. Created/updated by e.g. slink. Used by build "watch" tools.');
                     } else {
                         console.log('*** Looks like the package.json file in the linked package has changed. Please reinstall and reslink.');
                         process.exit(0);
