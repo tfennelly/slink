@@ -11,13 +11,14 @@ var path = require('path');
 var rimraf = require('rimraf');
 var _string = require('underscore.string');
 var syncLog = {};
+var numSlinks = 0;
 
 npm.load(function() {
     var gPrefix = npm.config.get('prefix');
     var gNodeModules = gPrefix + '/lib/node_modules';
     
-    if (process.argv.length !== 3) {
-        error("*** You must supply package name to be slink'd. (-h for help)");
+    if (process.argv.length < 3) {
+        error("*** You must supply package name(s) to be slink'd. (-h for help)");
         return;
     }
     
@@ -35,51 +36,60 @@ npm.load(function() {
             error("*** '" + packageDir + "' is not an NPM package (has no package.json).");
         }
     }
-    
-    var packageName = process.argv[2];
-    if (fs.existsSync(packageName)) {
-        // The user provided a path instead of a package name.
-        var packageLinkDir = path.resolve(process.cwd(), packageName);
-        packageName = getPackageName(packageLinkDir);
-    } else {
-        var packageLinkDir = path.resolve(gNodeModules, packageName);
-        if (!fs.existsSync(packageLinkDir)) {
-            // Maybe the user provided a path to the package being linked (instead of it's name).
-            packageLinkDir = path.resolve(process.cwd(), packageName);
-            if (fs.existsSync(packageLinkDir)) {
-                // Yep ... user provided a relative path. So, we need to discover the package name.
-                packageName = getPackageName(packageLinkDir);
-            } else {
-                error("*** Package '" + packageName + "' has not yet been globally linked. You must go there and link it first.");
-                return;
+
+    function doSlink(packageName) {
+        if (fs.existsSync(packageName)) {
+            // The user provided a path instead of a package name.
+            var packageLinkDir = path.resolve(process.cwd(), packageName);
+            packageName = getPackageName(packageLinkDir);
+        } else {
+            var packageLinkDir = path.resolve(gNodeModules, packageName);
+            if (!fs.existsSync(packageLinkDir)) {
+                // Maybe the user provided a path to the package being linked (instead of it's name).
+                packageLinkDir = path.resolve(process.cwd(), packageName);
+                if (fs.existsSync(packageLinkDir)) {
+                    // Yep ... user provided a relative path. So, we need to discover the package name.
+                    packageName = getPackageName(packageLinkDir);
+                } else {
+                    error("*** Package '" + packageName + "' has not yet been globally linked. You must go there and link it first.");
+                    return;
+                }
             }
         }
-    }
-    
-    var lstatLinkDir = fs.lstatSync(packageLinkDir);
-    if (lstatLinkDir.isSymbolicLink()) {
-        packageLinkDir = fs.readlinkSync(packageLinkDir);
-    }
-    
-    var packageLocalNMDir = path.resolve(process.cwd(), 'node_modules/' + packageName);
-    if (!fs.existsSync(packageLocalNMDir)) {
-        error("*** Package '" + packageName + "' has not yet been installed in this package/project.");
-        return;
-    }
-    var slinkMarkerFile = path.resolve(packageLocalNMDir, '.slink');
 
-    var linkedPackageJSON = require(packageLinkDir + '/package.json');
-    
-    // Watch all files (but the node_modules) in the linked package, copying changes
-    // as they happen.
-    watchAll(packageLinkDir, packageLocalNMDir, linkedPackageJSON.files, false);
-    console.log('Watching for changes in ' + packageLinkDir);
-    
-    // Create the marker file.
-    fs.writeFileSync(slinkMarkerFile, '');
+        var lstatLinkDir = fs.lstatSync(packageLinkDir);
+        if (lstatLinkDir.isSymbolicLink()) {
+            packageLinkDir = fs.readlinkSync(packageLinkDir);
+        }
+
+        var packageLocalNMDir = path.resolve(process.cwd(), 'node_modules/' + packageName);
+        if (!fs.existsSync(packageLocalNMDir)) {
+            error("*** Package '" + packageName + "' has not yet been installed in this package/project.");
+            return;
+        }
+        var slinkMarkerFile = path.resolve(packageLocalNMDir, '.slink');
+
+        var linkedPackageJSON = require(packageLinkDir + '/package.json');
+
+        // Watch all files (but the node_modules) in the linked package, copying changes
+        // as they happen.
+        watchAll(packageName, packageLinkDir, packageLocalNMDir, linkedPackageJSON.files, false);
+        console.log('Watching for changes in ' + packageLinkDir);
+
+        // Create the marker file.
+        fs.writeFileSync(slinkMarkerFile, '');
+
+        numSlinks++;
+    }
+
+    // Slink all the packages/dirs listed in the remaining
+    // command line args...
+    for (var i = 2; i < process.argv.length; i++) {
+        doSlink(process.argv[i]);
+    }
 });
 
-function watchAll(packageLinkDir, packageLocalNMDir, filesSpec, tellTheUser) {
+function watchAll(packageName, packageLinkDir, packageLocalNMDir, filesSpec, tellTheUser) {
     var targetDir = path.resolve(packageLinkDir, 'target');
     walkDirTree(packageLinkDir, function(dir) {
         if (_string.endsWith(dir, 'node_modules') || dir === targetDir) {
@@ -133,15 +143,21 @@ function watchAll(packageLinkDir, packageLocalNMDir, filesSpec, tellTheUser) {
                 // If the file in the link dir is newer than the local file
                 if (localFileStat === undefined || linkFileStat.mtime.getTime() > localFileStat.mtime.getTime()) {
                     if (linkFile !== 'package.json') {
+                        var logPrefix = '    ';
+
+                        if (numSlinks > 1) {
+                            logPrefix += '[' + packageName + '] ';
+                        }
+
                         // See https://github.com/tfennelly/slink/issues/1
                         if (!isFileOfInterest(linkFilePath, packageLinkDir, filesSpec)) {
                             if (tellTheUser) {
-                                console.log('    ' + relativeToPackageRoot + linkFile + ' changed but is outside package.json:files. Ignoring change.');
+                                console.log(logPrefix + relativeToPackageRoot + linkFile + ' changed but is outside package.json:files. Ignoring change.');
                             }
                             continue;
                         }
                         if (tellTheUser) {
-                            console.log('    ' + relativeToPackageRoot + linkFile + ' changes synchronized.');
+                            console.log(logPrefix + relativeToPackageRoot + linkFile + ' changes synchronized.');
                         }
 
                         // If the same file exists in the locally installed
@@ -164,7 +180,7 @@ function watchAll(packageLinkDir, packageLocalNMDir, filesSpec, tellTheUser) {
     });
     
     setTimeout(function() {
-        watchAll(packageLinkDir, packageLocalNMDir, filesSpec, true);
+        watchAll(packageName, packageLinkDir, packageLocalNMDir, filesSpec, true);
     }, 1000);
 }
 
@@ -215,7 +231,7 @@ function printHelp() {
     console.log("slink is a source only 'link' i.e. it does");
     console.log("not link the node_modules dir, which means that the");
     console.log("linked package will have a properly flattened");
-    console.log("and deduped node-modules dir wrt the package");
+    console.log("and deduped node-modules dir wrt the package(s)");
     console.log("being linked into.");
     console.log("");
     console.log("Goto https://www.npmjs.com/package/slink for usage");
