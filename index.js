@@ -151,8 +151,9 @@ function watchAll(packageName, packageLinkDir, packageLocalNMDir, filesSpec, tel
 
                         // See https://github.com/tfennelly/slink/issues/1
                         if (!isFileOfInterest(linkFilePath, packageLinkDir, filesSpec)) {
-                            if (tellTheUser) {
-                                console.log(logPrefix + relativeToPackageRoot + linkFile + ' changed but is outside package.json:files. Ignoring change.');
+                            var relativeFilePath = relativeToPackageRoot + linkFile;
+                            if (tellTheUser && !isToolFile(relativeFilePath)) {
+                                console.log(logPrefix + relativeFilePath + ' changed but is outside package.json:files. Ignoring change.');
                             }
                             continue;
                         }
@@ -223,6 +224,18 @@ function isInDirectory(filePath, dir) {
     } else {
         return isInDirectory(parentDir, dir);
     }
+}
+
+function isToolFile(filePath) {
+    if (filePath.indexOf('./.git/') === 0) {
+        return true;
+    }
+    // IntelliJ
+    if (filePath.indexOf('./.idea/') === 0) {
+        return true;
+    }
+    // TODO add eclipse etc
+    return false;
 }
 
 function error(message) {
